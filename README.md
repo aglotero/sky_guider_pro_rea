@@ -1,11 +1,11 @@
 # iOptron iPolar / SkyGuider Pro Polar Alignment Suite (Windows 11 Fixed Edition)
 
-A clean-room, hardware-compatible re-implementation of **iOptron iPolar v2.92** (`iOptron iPolar.exe`) built from reverse engineering the shipped NativeAOT binary (`SHA-256: 9cbc332f5aaa4604e5d32a0c41cbb1c86430af9b6feda0fe280cbc4abd638159`).
+A clean-room, 100% standalone, hardware-compatible re-implementation of **iOptron iPolar v2.92** (`iOptron iPolar.exe`) built from reverse engineering the shipped NativeAOT binary (`SHA-256: 9cbc332f5aaa4604e5d32a0c41cbb1c86430af9b6feda0fe280cbc4abd638159`).
 
 ## Quick Start
 
 ```powershell
-# Install standalone dependencies (numpy + opencv-python, no iOptron binary needed)
+# Install standalone dependencies (numpy + full opencv-python, no iOptron binary needed)
 pip install -r d:\ltisistemas\sky_guider_pro_rea\requirements.txt
 
 # Launch the GUI (auto-detects USB iPolar camera or falls back to Sky Simulator)
@@ -20,6 +20,23 @@ python d:\ltisistemas\sky_guider_pro_rea\ipolar_app.py --night
 # Run the automated verification suite
 python d:\ltisistemas\sky_guider_pro_rea\test_ipolar.py
 ```
+
+---
+
+## Outdoor Polar Alignment Field Guide
+
+1. **Exposure, Gain & Dark Frame Setup**:
+   - Connect your iPolar USB camera and click **Connect Camera**.
+   - For outdoor night sky use, set **Exposure** to `500 ms` or `1000 ms` and **Gain** around `8`–`12`. *(When testing indoors during the day or in a lit room, drop **Exposure** to `5 ms` – `20 ms` so the sensor does not saturate at `255`.)*
+   - *(Optional)* Place the lens cap over the iPolar and click **Capture Dark (5 frames)** to subtract hot pixels (`DarkFrame.bin`).
+2. **2-Position RA Axis Center Calibration**:
+   - Point your SkyGuider Pro roughly toward the Celestial Pole, wait for `"SOLVED"` (`4+` matched catalog stars), and click **Confirm Position 1**.
+   - Loosen the RA clutch, rotate the camera / RA axis by `30°`–`90°`, and hold steady for ~1 second.
+   - With **Auto-Confirm Position 2** checked, the app will automatically lock in and save your **RA Axis Center** once 3 consecutive frames stabilize (or you can click **Confirm Position 2** manually at any time once rotation exceeds `15°`).
+3. **Precision Alt / Az Polar Alignment**:
+   - Enable **Night Mode (Red)** to preserve your dark adaptation in the field.
+   - Adjust your mount's Altitude and Azimuth bolts following the live **ALT** (`▲ UP` / `▼ DOWN`) and **AZ** (`◄ LEFT` / `► RIGHT`) readouts until the **Celestial Pole** bullseye sits inside the **RA Center** crosshair.
+   - Once the pole is within ~18 arcminutes (`< 35 px`) of the RA Center, the viewport automatically switches to **`4x` Precision Zoom** (you can also toggle **Zoom Target** manually at any time, even before calibration).
 
 ---
 
@@ -47,11 +64,30 @@ python d:\ltisistemas\sky_guider_pro_rea\test_ipolar.py
 
 ---
 
+## Key Design Decisions & Hardware Findings
+
+1. **Standalone USB Capture via Full `opencv-python` (`CAP_MSMF`)**:
+   - The iPolar v1 camera transmits its `1280×960` raw 8-bit sensor rows packed inside a `640×960` 16-bit (`YUY2`) UVC container (`1,228,800` bytes) and requires `CAP_PROP_CONVERT_RGB = 0` (`0x69a890..0x69ab90`).
+   - Full `opencv-python` (not `opencv-python-headless`) is required on Windows because `headless` strips out `opencv_videoio_msmf*.dll`, and OpenCV's DirectShow (`CAP_DSHOW`) backend ignores `CAP_PROP_CONVERT_RGB = 0` and converts the raw stream into a 3-channel `(960, 640, 3)` BGR image.
+   - `USBIPolarCamera` probes MediaFoundation (`CAP_MSMF`) and validates the raw buffer dimensions (`(960, 1280)` for v1, `(1096, 1944)` for v2), automatically scanning indices `0..3` if Windows PnP device order differs from MediaFoundation order.
+2. **Bayer `GRBG` Demosaicing (`cv2.COLOR_BayerGR2GRAY`) & Anti-Aliased Viewport**:
+   - The physical sensor in `iOptron iPolar 1.1` (`AR0130CS`) has a `2×2` `GRBG` Bayer Color Filter Array. Unpacking raw bytes without demosaicing creates a `2×2` checkerboard under continuous lighting.
+   - `unpack_ipolar_raw_frame(..., debayer=True)` applies hardware-speed `cv2.cvtColor(img, cv2.COLOR_BayerGR2GRAY)` demosaicing (reducing `2×2` sub-pixel variance from `12.92` to `0.029`) and `_render_canvas` scales the viewport using `cv2.resize(..., cv2.INTER_AREA)`.
+3. **Digital ISP Gain Curve for Fixed-Gain iPolar 1.1 Firmware**:
+   - The `iOptron iPolar 1.1` UVC firmware locks hardware `CAP_PROP_GAIN (14)` to `64.0` and rejects UVC `SET_CUR` requests for `0..16` (which is why iOptron hid `trackBarGain` in `v2.92`).
+   - When `USBIPolarCamera` detects that hardware UVC gain is locked, it applies a real-time logarithmic ISP gain multiplier $\text{factor} = 2^{(\text{gain} - 8) / 4}$ (`Gain = 0` $\rightarrow 0.25\times$, `Gain = 8` $\rightarrow 1.0\times$, `Gain = 16` $\rightarrow 4.0\times$).
+4. **Night Vision Mode (Red Theme), Responsive Scrollbar & Anytime `4x` Zoom**:
+   - **Night Mode (`--night`)**: Renders the entire UI and live star feed (`P6` monochrome red PPM) in deep red (`#070000`–`#ff4d4d`) with zero green/blue emission.
+   - **Auto-Hiding Sidebar Scrollbar**: Automatically appears when the window is resized smaller than the right control panel height and supports mousewheel scrolling.
+   - **Anytime `4x` Zoom Target**: Crops a `320×240` (`4x`) precision view around the calibrated RA Axis Center (or around the sensor center `(480, 640)` if not yet calibrated).
+
+---
+
 ## Architecture of the Replacement Suite
 
 - [`ipolar_catalog.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_catalog.py): Exact 77-star Northern and 66-star Southern Hemisphere catalogs + IAU precession, 13-term nutation, GMST/GAST, and Bennett atmospheric refraction extracted from `.rdata` (`0x4ac5e00..0x4ac8a28`).
-- [`ipolar_camera.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_camera.py): Standalone hardware USB capture for iPolar v1 (`640x960` raw 16-bit unpacked to `1280x960` 8-bit grayscale, `30.94"/px`) and iPolar v2 (`1944x1096`, `23.93"/px`) using standard `cv2.VideoCapture` (`opencv-python` with `CAP_MSMF`) with zero dependency on `iOptron iPolar.exe` (keeping `cvextern.dll` only as an optional fallback), plus a realistic **Astrometric Sky Simulator**.
+- [`ipolar_camera.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_camera.py): Standalone hardware USB capture for iPolar v1 (`1280×960`, `30.94"/px`) and iPolar v2 (`1944×1096`, `23.93"/px`) using `cv2.VideoCapture` (`CAP_MSMF`), `COLOR_BayerGR2GRAY` demosaicing, ISP gain fallback, and a realistic **Astrometric Sky Simulator**.
 - [`ipolar_solver.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_solver.py): Sub-pixel star centroid detector, fast pair/triangle plate solver, `DarkFrame.bin` manager, and the fixed **Dual-Method RA Axis Center Calibrator** (combining rigid-body pole rotation + common-star perpendicular bisectors).
 - [`ipolar_profile.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_profile.py): Full read/write compatibility with `%LOCALAPPDATA%\iOptron iPolar\Profile.local.txt` and `Profile.global.txt` (Base64 key-value format).
-- [`ipolar_app.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_app.py): Windows 11 Per-Monitor v2 High-DPI native GUI with live star overlay, 4x auto-zoom bullseye, Alt/Az knob guidance, and interactive simulator controls.
-- [`test_ipolar.py`](file:///d:/ltisistemas/sky_guider_pro_rea/test_ipolar.py): Automated unit and GUI verification suite.
+- [`ipolar_app.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_app.py): Windows 11 Per-Monitor v2 High-DPI native GUI with Night Vision mode, auto-scrolling sidebar, live star overlay, `4x` precision zoom, and Alt/Az knob guidance.
+- [`test_ipolar.py`](file:///d:/ltisistemas/sky_guider_pro_rea/test_ipolar.py): Automated unit and GUI verification suite (`6` tests covering astrometry, profiles/dark frames, N/S plate solving, disjoint-star calibration, GUI/Night Mode/Scrollbar, and standalone `cv2` raw unpacking + Bayer demosaicing).
