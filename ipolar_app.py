@@ -500,7 +500,10 @@ class IPolarApp:
         self.cmb_exp.bind("<<ComboboxSelected>>", self._on_exposure_changed)
 
         ttk.Checkbutton(
-            grp_cam, text="RAW Image", variable=self.var_raw_image
+            grp_cam,
+            text="RAW Image",
+            variable=self.var_raw_image,
+            command=self._render_canvas,
         ).grid(row=3, column=2, sticky="e", pady=2)
 
         ttk.Label(grp_cam, text="Gain:").grid(row=4, column=0, sticky="w", pady=2)
@@ -527,7 +530,10 @@ class IPolarApp:
         cmb_stack.grid(row=5, column=1, sticky="w", pady=2, padx=4)
 
         ttk.Checkbutton(
-            grp_cam, text="Zoom Target", variable=self.var_zoom_target
+            grp_cam,
+            text="Zoom Target",
+            variable=self.var_zoom_target,
+            command=self._render_canvas,
         ).grid(row=5, column=2, sticky="e", pady=2)
 
         # Telemetry labels (always visible, never blank!)
@@ -1087,11 +1093,13 @@ class IPolarApp:
             if dist_to_center < 35.0:
                 zoom_active = True
 
-        if zoom_active and self.profile.has_valid_center:
-            # Crop a 320x240 region around (center_row_x, center_col_y) for 4x precision view
+        if zoom_active:
+            # Crop a 320x240 region around calibrated RA Axis Center (or sensor center if uncalibrated) for 4x view
             crop_h, crop_w = 240, 320
-            r0 = int(round(self.profile.center_row_x)) - crop_h // 2
-            c0 = int(round(self.profile.center_col_y)) - crop_w // 2
+            target_r = self.profile.center_row_x if self.profile.has_valid_center else (fh / 2.0)
+            target_c = self.profile.center_col_y if self.profile.has_valid_center else (fw / 2.0)
+            r0 = int(round(target_r)) - crop_h // 2
+            c0 = int(round(target_c)) - crop_w // 2
             r0 = max(0, min(fh - crop_h, r0))
             c0 = max(0, min(fw - crop_w, c0))
             sub_img = frame[r0 : r0 + crop_h, c0 : c0 + crop_w]
