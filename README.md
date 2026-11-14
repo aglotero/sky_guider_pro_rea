@@ -6,19 +6,19 @@ A clean-room, 100% standalone, hardware-compatible re-implementation of **iOptro
 
 ```powershell
 # Install standalone dependencies (numpy + full opencv-python, no iOptron binary needed)
-pip install -r d:\ltisistemas\sky_guider_pro_rea\requirements.txt
+pip install -r d:\sky_guider_pro_rea\requirements.txt
 
 # Launch the GUI (auto-detects USB iPolar camera or falls back to Sky Simulator)
-python d:\ltisistemas\sky_guider_pro_rea\ipolar_app.py
+python d:\sky_guider_pro_rea\ipolar_app.py
 
 # Launch directly in Sky Simulator Mode for indoor testing
-python d:\ltisistemas\sky_guider_pro_rea\ipolar_app.py --sim
+python d:\sky_guider_pro_rea\ipolar_app.py --sim
 
 # Launch with Night Vision (Red Theme) enabled for outdoor dark adaptation
-python d:\ltisistemas\sky_guider_pro_rea\ipolar_app.py --night
+python d:\sky_guider_pro_rea\ipolar_app.py --night
 
 # Run the automated verification suite
-python d:\ltisistemas\sky_guider_pro_rea\test_ipolar.py
+python d:\sky_guider_pro_rea\test_ipolar.py
 ```
 
 ---
