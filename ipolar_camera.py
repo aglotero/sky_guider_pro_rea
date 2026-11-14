@@ -164,11 +164,13 @@ def unpack_ipolar_raw_frame(
     fallback_height: int = 0,
     fallback_step: int = 0,
     fallback_width: int = 0,
+    debayer: bool = False,
 ) -> Optional[np.ndarray]:
     """
     Unpacks raw USB UVC frame bytes from iPolar v1 or v2 (with CAP_PROP_CONVERT_RGB=0):
     - v1 (0x69ab90): 640x960 16-bit raw (1,228,800 bytes) -> 960x1280 uint8 grayscale
     - v2 (0x69af90): 1458x1107 12-bit packed raw (3 bytes -> 2 pixels) -> 1096x1944 uint8 grayscale
+    When `debayer=True`, converts the sensor's raw 2x2 Bayer CFA pattern (GRBG) into smooth grayscale.
     """
     # Guard against 3-channel BGR frames (e.g. 960x640x3 = 1,843,200 bytes from DSHOW when ConvertRgb=0 is ignored)
     if raw_bytes.ndim == 3 and raw_bytes.shape[2] == 3:
@@ -177,20 +179,25 @@ def unpack_ipolar_raw_frame(
     raw_1d = np.ascontiguousarray(raw_bytes).view(np.uint8).ravel()
     total_bytes = int(raw_1d.size)
 
+    img: Optional[np.ndarray] = None
     if version == 1 and total_bytes == 1280 * 960:
         # 0x69ab90: 640x960 YUY2/16-bit raw with ConvertRgb=0 is 1,228,800 bytes = 960x1280 uint8
-        return raw_1d.reshape((960, 1280)).copy()
+        img = raw_1d.reshape((960, 1280)).copy()
     elif version == 2 and total_bytes >= 2916 * 1096:
         # 0x69af90: 12-bit packed raw in 1458x1107 16-bit UVC container (2916 bytes/row = 972*3 -> 1944 pixels/row)
         raw_rows = raw_1d[: 2916 * 1096].reshape((1096, 972, 3))
         out = np.empty((1096, 972, 2), dtype=np.uint8)
         out[:, :, 0] = raw_rows[:, :, 0]
         out[:, :, 1] = ((raw_rows[:, :, 1] & 0x0F) << 4) | (raw_rows[:, :, 2] >> 4)
-        return out.reshape((1096, 1944))
+        img = out.reshape((1096, 1944))
     elif fallback_height > 0 and fallback_step > 0 and fallback_width > 0 and total_bytes >= fallback_height * fallback_step:
         arr = raw_1d[: fallback_height * fallback_step].reshape((fallback_height, fallback_step))[:, :fallback_width]
-        return arr.copy()
-    return None
+        img = arr.copy()
+
+    if img is not None and debayer:
+        if HAS_CV2 and cv2 is not None:
+            img = cv2.cvtColor(img, cv2.COLOR_BayerGR2GRAY)
+    return img
 
 
 class USBIPolarCamera:
@@ -202,10 +209,17 @@ class USBIPolarCamera:
     Implements exact frame unpacking from 0x69a880..0x69b350.
     """
 
-    def __init__(self, device_index: int = 0, version: int = 1, use_cvextern_fallback: bool = True) -> None:
+    def __init__(
+        self,
+        device_index: int = 0,
+        version: int = 1,
+        use_cvextern_fallback: bool = True,
+        debayer: bool = True,
+    ) -> None:
         self.device_index = device_index
         self.version = version
         self.use_cvextern_fallback = use_cvextern_fallback
+        self.debayer = debayer
         self._cv2_cap: Optional[Any] = None
         self.cv_wrap: Optional[CvExternWrapper] = None
         self.cap_ptr: Optional[ctypes.c_void_p] = None
@@ -343,7 +357,7 @@ class USBIPolarCamera:
             h = mat.shape[0] if mat.ndim >= 2 else 0
             w = mat.shape[1] if mat.ndim >= 2 else 0
             step = int(mat.nbytes // h) if h > 0 else 0
-            return unpack_ipolar_raw_frame(mat, self.version, h, step, w)
+            return unpack_ipolar_raw_frame(mat, self.version, h, step, w, debayer=self.debayer)
 
         # 2. Fallback Backend: cvextern.dll
         if not self.cap_ptr or not self.mat_ptr or self.cv_wrap is None or self.cv_wrap.cv is None:
@@ -365,7 +379,7 @@ class USBIPolarCamera:
             ctypes.cast(data_ptr, ctypes.POINTER(ctypes.c_uint8)),
             shape=(total_bytes,),
         )
-        return unpack_ipolar_raw_frame(raw_bytes, self.version, sz.height, step, sz.width)
+        return unpack_ipolar_raw_frame(raw_bytes, self.version, sz.height, step, sz.width, debayer=self.debayer)
 
     def close(self) -> None:
         self.is_connected = False

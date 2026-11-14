@@ -250,7 +250,7 @@ class TestIPolarReimplementation(unittest.TestCase):
         self.assertTrue(np.all(unpacked_v2[:, 1::2] == 0xCD))
 
         # 3. Verify USBIPolarCamera with mock cv2.VideoCapture and zero cvextern dependency
-        cam = USBIPolarCamera(device_index=0, version=1, use_cvextern_fallback=False)
+        cam = USBIPolarCamera(device_index=0, version=1, use_cvextern_fallback=False, debayer=False)
         self.assertIsNone(cam.cv_wrap)
 
         class _FakeCap:
@@ -269,6 +269,18 @@ class TestIPolarReimplementation(unittest.TestCase):
         self.assertIsNotNone(frame)
         self.assertEqual(frame.shape, (960, 1280))
         np.testing.assert_array_equal(frame, expected_v1)
+
+        # 4. Verify Bayer GRBG demosaicing eliminates 2x2 checkerboard pattern
+        bayer_frame = np.zeros((960, 1280), dtype=np.uint8)
+        bayer_frame[0::2, 0::2] = 176  # G1
+        bayer_frame[0::2, 1::2] = 131  # R
+        bayer_frame[1::2, 0::2] = 119  # B
+        bayer_frame[1::2, 1::2] = 176  # G2
+        debayered = unpack_ipolar_raw_frame(bayer_frame.view(np.uint16).reshape((960, 640)), version=1, debayer=True)
+        self.assertIsNotNone(debayered)
+        self.assertEqual(debayered.shape, (960, 1280))
+        # Interior pixels should be completely uniform (zero checkerboard variance)
+        self.assertEqual(int( np.ptp(debayered[2:-2, 2:-2]) ), 0)
         cam.close()
 
 

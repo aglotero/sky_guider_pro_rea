@@ -25,8 +25,10 @@ import numpy as np
 from ipolar_catalog import PLATE_SCALE_IPOLAR_V1
 from ipolar_profile import DEFAULT_IPOLAR_DIR, EXPOSURE_LABELS, IPolarProfile
 from ipolar_camera import (
+    HAS_CV2,
     SimulatedIPolarCamera,
     USBIPolarCamera,
+    cv2,
     enumerate_ipolar_devices,
 )
 from ipolar_solver import (
@@ -1109,14 +1111,24 @@ class IPolarApp:
         if self.var_raw_image.get():
             vis = sub_img
         else:
-            # Contrast-stretched star preview (subtract dark/background floor, boost stars)
             bg = float(np.percentile(sub_img, 55))
-            vis = np.clip((sub_img.astype(np.float32) - bg) * 3.2, 0, 255).astype(np.uint8)
+            if bg > 35.0 and len(self.last_solve.matched_stars) == 0:
+                # Indoor / twilight continuous-tone scene: preserve full dynamic range without clipping darks
+                lo, hi = np.percentile(sub_img, [2.0, 99.5])
+                span = max(1.0, float(hi - lo))
+                vis = np.clip((sub_img.astype(np.float32) - float(lo)) * (255.0 / span), 0, 255).astype(np.uint8)
+            else:
+                # Dark night-sky star preview (subtract dark/background floor, boost stars)
+                vis = np.clip((sub_img.astype(np.float32) - bg) * 3.2, 0, 255).astype(np.uint8)
 
-        # Nearest-neighbor fast resize using numpy indexing and PGM/PPM PhotoImage
-        y_idx = (np.arange(disp_h) * (view_h / disp_h)).astype(np.int32)
-        x_idx = (np.arange(disp_w) * (view_w / disp_w)).astype(np.int32)
-        resized = vis[y_idx[:, None], x_idx[None, :]]
+        # Area/bilinear resize via OpenCV (eliminates scaling moire/checkerboard), with numpy fallback
+        if HAS_CV2 and cv2 is not None:
+            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            resized = cv2.resize(vis, (disp_w, disp_h), interpolation=interp)
+        else:
+            y_idx = (np.arange(disp_h) * (view_h / disp_h)).astype(np.int32)
+            x_idx = (np.arange(disp_w) * (view_w / disp_w)).astype(np.int32)
+            resized = vis[y_idx[:, None], x_idx[None, :]]
         if nm:
             # Monochrome Red PPM (P6) so stars and sky glow purely in dark-adapted red
             rgb = np.zeros((disp_h, disp_w, 3), dtype=np.uint8)
