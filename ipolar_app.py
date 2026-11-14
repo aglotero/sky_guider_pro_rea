@@ -1113,10 +1113,8 @@ class IPolarApp:
         else:
             bg = float(np.percentile(sub_img, 55))
             if bg > 35.0 and len(self.last_solve.matched_stars) == 0:
-                # Indoor / twilight continuous-tone scene: preserve full dynamic range without clipping darks
-                lo, hi = np.percentile(sub_img, [2.0, 99.5])
-                span = max(1.0, float(hi - lo))
-                vis = np.clip((sub_img.astype(np.float32) - float(lo)) * (255.0 / span), 0, 255).astype(np.uint8)
+                # Indoor / twilight continuous-tone scene: render true sensor brightness so Exposure & Gain respond directly
+                vis = sub_img
             else:
                 # Dark night-sky star preview (subtract dark/background floor, boost stars)
                 vis = np.clip((sub_img.astype(np.float32) - bg) * 3.2, 0, 255).astype(np.uint8)

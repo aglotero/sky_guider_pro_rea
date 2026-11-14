@@ -229,7 +229,8 @@ class USBIPolarCamera:
         self.height = 960 if version == 1 else 1096
         self.plate_scale = PLATE_SCALE_IPOLAR_V1 if version == 1 else PLATE_SCALE_IPOLAR_V2
         self._current_exp_idx = -1
-        self._current_gain = -1
+        self._current_gain = 12
+        self._hw_gain_supported = True
 
     def _configure_cv2_cap(self, cap: Any) -> None:
         if self.version == 1:
@@ -330,7 +331,8 @@ class USBIPolarCamera:
                 self._cv2_cap.set(CAP_PROP_EXPOSURE, float(exposure_index - 13))
                 self._current_exp_idx = exposure_index
             if gain != self._current_gain:
-                self._cv2_cap.set(CAP_PROP_GAIN, float(gain))
+                # Note: iPolar 1.1 UVC firmware locks hardware CAP_PROP_GAIN to 64.0 and returns False for 0..16
+                self._hw_gain_supported = bool(self._cv2_cap.set(CAP_PROP_GAIN, float(gain)))
                 self._current_gain = gain
             return
 
@@ -342,8 +344,15 @@ class USBIPolarCamera:
             cv.cveVideoCaptureSet(self.cap_ptr, CAP_PROP_EXPOSURE, float(exposure_index - 13))
             self._current_exp_idx = exposure_index
         if gain != self._current_gain:
-            cv.cveVideoCaptureSet(self.cap_ptr, CAP_PROP_GAIN, float(gain))
+            self._hw_gain_supported = bool(cv.cveVideoCaptureSet(self.cap_ptr, CAP_PROP_GAIN, float(gain)))
             self._current_gain = gain
+
+    def _apply_isp_gain_if_needed(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if frame is None or self._hw_gain_supported or self._current_gain == 8:
+            return frame
+        # When hardware UVC gain is fixed (as on iPolar 1.1), apply digital ISP gain (gain=8 -> 1.0x, 0 -> 0.25x, 16 -> 4.0x)
+        factor = 2.0 ** ((float(self._current_gain) - 8.0) / 4.0)
+        return np.clip(frame.astype(np.float32) * factor, 0, 255).astype(np.uint8)
 
     def read_frame(self) -> Optional[np.ndarray]:
         if not self.is_connected:
@@ -357,7 +366,8 @@ class USBIPolarCamera:
             h = mat.shape[0] if mat.ndim >= 2 else 0
             w = mat.shape[1] if mat.ndim >= 2 else 0
             step = int(mat.nbytes // h) if h > 0 else 0
-            return unpack_ipolar_raw_frame(mat, self.version, h, step, w, debayer=self.debayer)
+            frame = unpack_ipolar_raw_frame(mat, self.version, h, step, w, debayer=self.debayer)
+            return self._apply_isp_gain_if_needed(frame)
 
         # 2. Fallback Backend: cvextern.dll
         if not self.cap_ptr or not self.mat_ptr or self.cv_wrap is None or self.cv_wrap.cv is None:
@@ -379,7 +389,8 @@ class USBIPolarCamera:
             ctypes.cast(data_ptr, ctypes.POINTER(ctypes.c_uint8)),
             shape=(total_bytes,),
         )
-        return unpack_ipolar_raw_frame(raw_bytes, self.version, sz.height, step, sz.width, debayer=self.debayer)
+        frame = unpack_ipolar_raw_frame(raw_bytes, self.version, sz.height, step, sz.width, debayer=self.debayer)
+        return self._apply_isp_gain_if_needed(frame)
 
     def close(self) -> None:
         self.is_connected = False
