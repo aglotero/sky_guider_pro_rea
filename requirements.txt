@@ -1,2 +1,4 @@
 numpy>=1.24.0
-opencv-python-headless>=4.8.0
+# Full opencv-python (not headless) is required on Windows because opencv-python-headless
+# omits the MediaFoundation (CAP_MSMF) plugin needed for CAP_PROP_CONVERT_RGB=0 raw UVC capture.
+opencv-python>=4.8.0

@@ -170,12 +170,16 @@ def unpack_ipolar_raw_frame(
     - v1 (0x69ab90): 640x960 16-bit raw (1,228,800 bytes) -> 960x1280 uint8 grayscale
     - v2 (0x69af90): 1458x1107 12-bit packed raw (3 bytes -> 2 pixels) -> 1096x1944 uint8 grayscale
     """
+    # Guard against 3-channel BGR frames (e.g. 960x640x3 = 1,843,200 bytes from DSHOW when ConvertRgb=0 is ignored)
+    if raw_bytes.ndim == 3 and raw_bytes.shape[2] == 3:
+        return None
+
     raw_1d = np.ascontiguousarray(raw_bytes).view(np.uint8).ravel()
     total_bytes = int(raw_1d.size)
 
-    if version == 1 and total_bytes >= 1280 * 960:
+    if version == 1 and total_bytes == 1280 * 960:
         # 0x69ab90: 640x960 YUY2/16-bit raw with ConvertRgb=0 is 1,228,800 bytes = 960x1280 uint8
-        return raw_1d[: 1280 * 960].reshape((960, 1280)).copy()
+        return raw_1d.reshape((960, 1280)).copy()
     elif version == 2 and total_bytes >= 2916 * 1096:
         # 0x69af90: 12-bit packed raw in 1458x1107 16-bit UVC container (2916 bytes/row = 972*3 -> 1944 pixels/row)
         raw_rows = raw_1d[: 2916 * 1096].reshape((1096, 972, 3))
@@ -192,7 +196,7 @@ def unpack_ipolar_raw_frame(
 class USBIPolarCamera:
     """
     Hardware USB camera interface for iOptron iPolar / iPolar 2.
-    Uses standard OpenCV (`cv2.VideoCapture` from `opencv-python-headless` / `opencv-python`)
+    Uses standard OpenCV (`cv2.VideoCapture` from `opencv-python` with `CAP_MSMF`)
     as the primary standalone backend (zero dependency on `iOptron iPolar.exe`), with
     `CvExternWrapper` (`cvextern.dll`) kept only as an optional fallback if `cv2` is not installed.
     Implements exact frame unpacking from 0x69a880..0x69b350.
@@ -213,44 +217,53 @@ class USBIPolarCamera:
         self._current_exp_idx = -1
         self._current_gain = -1
 
+    def _configure_cv2_cap(self, cap: Any) -> None:
+        if self.version == 1:
+            # 0x69a890..0x69a8de: height=960, width=640, convert_rgb=0
+            cap.set(CAP_PROP_FRAME_HEIGHT, 960.0)
+            cap.set(CAP_PROP_FRAME_WIDTH, 640.0)
+            cap.set(CAP_PROP_CONVERT_RGB, 0.0)
+            self.width = 1280
+            self.height = 960
+            self.plate_scale = PLATE_SCALE_IPOLAR_V1
+        else:
+            # 0x69acf0..0x69ad50: height=1107, width=1458, convert_rgb=0
+            cap.set(CAP_PROP_FRAME_HEIGHT, 1107.0)
+            cap.set(CAP_PROP_FRAME_WIDTH, 1458.0)
+            cap.set(CAP_PROP_CONVERT_RGB, 0.0)
+            self.width = 1944
+            self.height = 1096
+            self.plate_scale = PLATE_SCALE_IPOLAR_V2
+
     def connect(self, exposure_index: int = 12, gain: int = 12) -> bool:
         self._current_exp_idx = -1
         self._current_gain = -1
 
-        # 1. Primary Standalone Backend: Standard Python OpenCV (cv2.VideoCapture)
+        # Candidate device indices (prefer self.device_index first, then scan 0..3 in case PnP order != MSMF order)
+        candidate_indices = [self.device_index] + [i for i in range(4) if i != self.device_index]
+
+        # 1. Primary Standalone Backend: Standard Python OpenCV (cv2.VideoCapture with CAP_MSMF)
+        # Note: CAP_MSMF is required because CAP_DSHOW ignores CAP_PROP_CONVERT_RGB=0 and converts 640x960 YUY2 to 3-ch BGR.
         if HAS_CV2 and cv2 is not None:
-            for api in (CAP_MSMF, CAP_DSHOW, CAP_ANY):
+            for idx in candidate_indices:
                 try:
-                    cap = cv2.VideoCapture(self.device_index, api)
+                    cap = cv2.VideoCapture(idx, CAP_MSMF)
                     if cap is not None and cap.isOpened():
-                        self._cv2_cap = cap
-                        break
+                        self._configure_cv2_cap(cap)
+                        ok, probe_mat = cap.read()
+                        if ok and probe_mat is not None:
+                            unpacked = unpack_ipolar_raw_frame(probe_mat, self.version)
+                            if unpacked is not None and unpacked.shape == (self.height, self.width):
+                                self.device_index = idx
+                                self._cv2_cap = cap
+                                self.set_exposure_and_gain(exposure_index, gain)
+                                self.is_connected = True
+                                return True
+                        cap.release()
                     elif cap is not None:
                         cap.release()
                 except Exception:
                     pass
-
-            if self._cv2_cap is not None:
-                if self.version == 1:
-                    # 0x69a890..0x69a8de: height=960, width=640, convert_rgb=0
-                    self._cv2_cap.set(CAP_PROP_FRAME_HEIGHT, 960.0)
-                    self._cv2_cap.set(CAP_PROP_FRAME_WIDTH, 640.0)
-                    self._cv2_cap.set(CAP_PROP_CONVERT_RGB, 0.0)
-                    self.width = 1280
-                    self.height = 960
-                    self.plate_scale = PLATE_SCALE_IPOLAR_V1
-                else:
-                    # 0x69acf0..0x69ad50: height=1107, width=1458, convert_rgb=0
-                    self._cv2_cap.set(CAP_PROP_FRAME_HEIGHT, 1107.0)
-                    self._cv2_cap.set(CAP_PROP_FRAME_WIDTH, 1458.0)
-                    self._cv2_cap.set(CAP_PROP_CONVERT_RGB, 0.0)
-                    self.width = 1944
-                    self.height = 1096
-                    self.plate_scale = PLATE_SCALE_IPOLAR_V2
-
-                self.set_exposure_and_gain(exposure_index, gain)
-                self.is_connected = True
-                return True
 
         # 2. Optional Fallback Backend: cvextern.dll (only if cv2 is unavailable)
         if not self.use_cvextern_fallback:

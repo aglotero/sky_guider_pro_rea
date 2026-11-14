@@ -5,7 +5,7 @@ A clean-room, hardware-compatible re-implementation of **iOptron iPolar v2.92** 
 ## Quick Start
 
 ```powershell
-# Install standalone dependencies (numpy + opencv-python-headless, no iOptron binary needed)
+# Install standalone dependencies (numpy + opencv-python, no iOptron binary needed)
 pip install -r d:\ltisistemas\sky_guider_pro_rea\requirements.txt
 
 # Launch the GUI (auto-detects USB iPolar camera or falls back to Sky Simulator)
@@ -50,7 +50,7 @@ python d:\ltisistemas\sky_guider_pro_rea\test_ipolar.py
 ## Architecture of the Replacement Suite
 
 - [`ipolar_catalog.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_catalog.py): Exact 77-star Northern and 66-star Southern Hemisphere catalogs + IAU precession, 13-term nutation, GMST/GAST, and Bennett atmospheric refraction extracted from `.rdata` (`0x4ac5e00..0x4ac8a28`).
-- [`ipolar_camera.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_camera.py): Standalone hardware USB capture for iPolar v1 (`640x960` raw 16-bit unpacked to `1280x960` 8-bit grayscale, `30.94"/px`) and iPolar v2 (`1944x1096`, `23.93"/px`) using standard `cv2.VideoCapture` (`opencv-python-headless`) with zero dependency on `iOptron iPolar.exe` (keeping `cvextern.dll` only as an optional fallback), plus a realistic **Astrometric Sky Simulator**.
+- [`ipolar_camera.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_camera.py): Standalone hardware USB capture for iPolar v1 (`640x960` raw 16-bit unpacked to `1280x960` 8-bit grayscale, `30.94"/px`) and iPolar v2 (`1944x1096`, `23.93"/px`) using standard `cv2.VideoCapture` (`opencv-python` with `CAP_MSMF`) with zero dependency on `iOptron iPolar.exe` (keeping `cvextern.dll` only as an optional fallback), plus a realistic **Astrometric Sky Simulator**.
 - [`ipolar_solver.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_solver.py): Sub-pixel star centroid detector, fast pair/triangle plate solver, `DarkFrame.bin` manager, and the fixed **Dual-Method RA Axis Center Calibrator** (combining rigid-body pole rotation + common-star perpendicular bisectors).
 - [`ipolar_profile.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_profile.py): Full read/write compatibility with `%LOCALAPPDATA%\iOptron iPolar\Profile.local.txt` and `Profile.global.txt` (Base64 key-value format).
 - [`ipolar_app.py`](file:///d:/ltisistemas/sky_guider_pro_rea/ipolar_app.py): Windows 11 Per-Monitor v2 High-DPI native GUI with live star overlay, 4x auto-zoom bullseye, Alt/Az knob guidance, and interactive simulator controls.

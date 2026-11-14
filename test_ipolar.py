@@ -233,6 +233,10 @@ class TestIPolarReimplementation(unittest.TestCase):
         self.assertEqual(unpacked_v1.shape, (960, 1280))
         np.testing.assert_array_equal(unpacked_v1, expected_v1)
 
+        # Verify 3-channel BGR buffer (960x640x3 from DSHOW when ConvertRgb=0 is ignored) is rejected
+        bgr_dshow_mat = np.zeros((960, 640, 3), dtype=np.uint8)
+        self.assertIsNone(unpack_ipolar_raw_frame(bgr_dshow_mat, version=1))
+
         # 2. Verify iPolar v2 raw 1458x1107 16-bit (2916 bytes/row) 12-bit packed buffer -> 1096x1944 uint8 unpacking
         raw_v2_bytes = np.zeros((1107, 2916), dtype=np.uint8)
         raw_v2_bytes[:1096, 0::3] = 0xAB
