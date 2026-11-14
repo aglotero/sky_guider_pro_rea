@@ -220,6 +220,53 @@ class TestIPolarReimplementation(unittest.TestCase):
             finally:
                 root.destroy()
 
+    def test_standalone_cv2_usb_camera_unpacking(self) -> None:
+        from ipolar_camera import HAS_CV2, USBIPolarCamera, unpack_ipolar_raw_frame
+
+        self.assertTrue(HAS_CV2, "Standard cv2 (opencv-python-headless) should be available")
+
+        # 1. Verify iPolar v1 raw 640x960 16-bit buffer -> 960x1280 uint8 unpacking
+        expected_v1 = np.arange(960 * 1280, dtype=np.uint8).reshape((960, 1280))
+        raw_v1_mat = expected_v1.view(np.uint16).reshape((960, 640))
+        unpacked_v1 = unpack_ipolar_raw_frame(raw_v1_mat, version=1)
+        self.assertIsNotNone(unpacked_v1)
+        self.assertEqual(unpacked_v1.shape, (960, 1280))
+        np.testing.assert_array_equal(unpacked_v1, expected_v1)
+
+        # 2. Verify iPolar v2 raw 1458x1107 16-bit (2916 bytes/row) 12-bit packed buffer -> 1096x1944 uint8 unpacking
+        raw_v2_bytes = np.zeros((1107, 2916), dtype=np.uint8)
+        raw_v2_bytes[:1096, 0::3] = 0xAB
+        raw_v2_bytes[:1096, 1::3] = 0x0C
+        raw_v2_bytes[:1096, 2::3] = 0xD0
+        raw_v2_mat = raw_v2_bytes.view(np.uint16).reshape((1107, 1458))
+        unpacked_v2 = unpack_ipolar_raw_frame(raw_v2_mat, version=2)
+        self.assertIsNotNone(unpacked_v2)
+        self.assertEqual(unpacked_v2.shape, (1096, 1944))
+        self.assertTrue(np.all(unpacked_v2[:, 0::2] == 0xAB))
+        self.assertTrue(np.all(unpacked_v2[:, 1::2] == 0xCD))
+
+        # 3. Verify USBIPolarCamera with mock cv2.VideoCapture and zero cvextern dependency
+        cam = USBIPolarCamera(device_index=0, version=1, use_cvextern_fallback=False)
+        self.assertIsNone(cam.cv_wrap)
+
+        class _FakeCap:
+            def read(self):
+                return True, raw_v1_mat
+
+            def set(self, prop, val):
+                return True
+
+            def release(self):
+                pass
+
+        cam._cv2_cap = _FakeCap()
+        cam.is_connected = True
+        frame = cam.read_frame()
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.shape, (960, 1280))
+        np.testing.assert_array_equal(frame, expected_v1)
+        cam.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
